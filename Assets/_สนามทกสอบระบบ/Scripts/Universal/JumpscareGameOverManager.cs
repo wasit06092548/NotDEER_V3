@@ -861,7 +861,7 @@ public class JumpscareGameOverManager : MonoBehaviour
     private static void EnsureEventSystem()
     {
 #if UNITY_2023_1_OR_NEWER
-        EventSystem existing = FindAnyObjectByType<EventSystem>(); // FindFirstObjectByType is obsolete in Unity 6.1+
+        EventSystem existing = FindAnyObjectByType<EventSystem>(); // FindFirstObjectByType is deprecated since Unity 6.4 — FindAnyObjectByType is the current API
 #else
         EventSystem existing = FindObjectOfType<EventSystem>();
 #endif
@@ -870,10 +870,36 @@ public class JumpscareGameOverManager : MonoBehaviour
         GameObject esGO = new GameObject("EventSystem");
         esGO.AddComponent<EventSystem>();
 
+        // VR support: in a scene with XRI UI interactors (the XR Origin's poke/ray
+        // interactors), XRI requires its own XRUIInputModule and would disable any
+        // other module on this EventSystem with a "Only one UI Input Module allowed"
+        // warning. Create the XRUIInputModule directly instead — it also forwards
+        // mouse input (enableMouseInput is on by default), so clicking with the
+        // mouse keeps working in the same scene.
+        if (SceneHasXrUiInteractors())
+        {
+            esGO.AddComponent<UnityEngine.XR.Interaction.Toolkit.UI.XRUIInputModule>();
+            return;
+        }
+
 #if ENABLE_INPUT_SYSTEM
         esGO.AddComponent<InputSystemUIInputModule>();
 #else
         esGO.AddComponent<StandaloneInputModule>();
+#endif
+    }
+
+    /// <summary>True when the scene contains XRI interactors that drive UI (poke / ray / near-far). Checked including inactive objects so a disabled XR rig still counts.</summary>
+    private static bool SceneHasXrUiInteractors()
+    {
+#if UNITY_2023_1_OR_NEWER
+        return FindAnyObjectByType<UnityEngine.XR.Interaction.Toolkit.Interactors.XRPokeInteractor>(FindObjectsInactive.Include) != null
+            || FindAnyObjectByType<UnityEngine.XR.Interaction.Toolkit.Interactors.XRRayInteractor>(FindObjectsInactive.Include) != null
+            || FindAnyObjectByType<UnityEngine.XR.Interaction.Toolkit.Interactors.NearFarInteractor>(FindObjectsInactive.Include) != null;
+#else
+        return FindObjectOfType<UnityEngine.XR.Interaction.Toolkit.Interactors.XRPokeInteractor>() != null
+            || FindObjectOfType<UnityEngine.XR.Interaction.Toolkit.Interactors.XRRayInteractor>() != null
+            || FindObjectOfType<UnityEngine.XR.Interaction.Toolkit.Interactors.NearFarInteractor>() != null;
 #endif
     }
 
