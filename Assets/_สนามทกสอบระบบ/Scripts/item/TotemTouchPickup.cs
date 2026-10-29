@@ -1,3 +1,4 @@
+using Unity.XR.CoreUtils;
 using UnityEngine;
 using UnityEngine.Events;
 using UnityEngine.XR.Interaction.Toolkit.Interactors;
@@ -12,6 +13,16 @@ using UnityEngine.XR.Interaction.Toolkit.Interactors;
 ///     per the checkbox) instead
 /// Hands are found automatically from the XR rig's controller interactors
 /// (Near-Far Interactors). Nothing to configure in the Inspector.
+///
+/// v1.1 — hand detection hardened:
+///   • the interactor scan now INCLUDES inactive objects, so a rig that is
+///     currently disabled (or appears later) is still found — Update keeps
+///     retrying about once per second either way;
+///   • new fallback: controller objects ("Left/Right Controller") are searched
+///     UNDER any XROrigin in the scene instead of GameObject.Find (which only
+///     sees active objects);
+///   • "no hands yet" is now a WARNING, not an error — it is a temporary,
+///     self-healing state, and desktop mode (E-key pickup) is unaffected.
 /// </summary>
 public class TotemTouchPickup : MonoBehaviour
 {
@@ -112,8 +123,19 @@ public class TotemTouchPickup : MonoBehaviour
             return;
         }
 
-        // 2. Automatic: every controller interactor in the scene (the Near-Far Interactors on the XR Origin controllers).
-        XRBaseInputInteractor[] interactors = FindObjectsByType<XRBaseInputInteractor>();
+        // 2. Automatic: every controller interactor in the scene (the Near-Far,
+        //    Poke, Ray and Teleport interactors on the XR Origin controllers).
+        //    Inactive objects are INCLUDED on purpose: a rig that is currently
+        //    disabled - or one that appears later - is still found, and the
+        //    Update retry locks onto it the moment it becomes usable.
+        XRBaseInputInteractor[] interactors;
+#if UNITY_6000_0_OR_NEWER
+        interactors = FindObjectsByType<XRBaseInputInteractor>(FindObjectsInactive.Include);
+#elif UNITY_2023_1_OR_NEWER
+        interactors = FindObjectsByType<XRBaseInputInteractor>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+#else
+        interactors = FindObjectsOfType<XRBaseInputInteractor>(true);
+#endif
         if (interactors != null && interactors.Length > 0)
         {
             hands = new Transform[interactors.Length];
@@ -126,37 +148,66 @@ public class TotemTouchPickup : MonoBehaviour
             return;
         }
 
-        // 3. Fallback: standard XR Origin controller object names.
-        GameObject left = GameObject.Find("Left Controller");
-        GameObject right = GameObject.Find("Right Controller");
-        int found = (left != null ? 1 : 0) + (right != null ? 1 : 0);
-        if (found > 0)
+        // 3. Fallback: controller GameObjects by name, searched under any XR
+        //    Origin in the scene (works even when the rig is disabled, unlike
+        //    GameObject.Find which only sees active objects).
+        XROrigin xrOrigin;
+#if UNITY_2023_1_OR_NEWER
+        xrOrigin = FindAnyObjectByType<XROrigin>(FindObjectsInactive.Include);
+#else
+        xrOrigin = FindObjectOfType<XROrigin>();
+#endif
+        if (xrOrigin != null)
         {
-            hands = new Transform[found];
-            int index = 0;
-            if (left != null)
+            Transform left = FindDescendant(xrOrigin.transform, "Left Controller");
+            Transform right = FindDescendant(xrOrigin.transform, "Right Controller");
+            int found = (left != null ? 1 : 0) + (right != null ? 1 : 0);
+            if (found > 0)
             {
-                hands[index] = left.transform;
-                index++;
+                hands = new Transform[found];
+                int index = 0;
+                if (left != null)
+                {
+                    hands[index] = left;
+                    index++;
+                }
+                if (right != null)
+                {
+                    hands[index] = right;
+                    index++;
+                }
+                Debug.Log("[TotemTouchPickup] '" + name + "' watching " + found + " hand(s) by name.", this);
+                return;
             }
-            if (right != null)
-            {
-                hands[index] = right.transform;
-                index++;
-            }
-            Debug.Log("[TotemTouchPickup] '" + name + "' watching " + found + " hand(s) by name.", this);
-            return;
         }
 
+        // 4. Nothing found yet. Not fatal - Update retries about once per
+        //    second, and desktop mode is unaffected (the E-key pickup on
+        //    ItemPickup does not depend on this script at all).
         hands = new Transform[0];
         if (!loggedNoHands)
         {
             loggedNoHands = true;
-            Debug.LogError("[TotemTouchPickup] No XR hands found in the scene - touch pickup will not trigger. " +
+            Debug.LogWarning("[TotemTouchPickup] No XR hands found yet on '" + name + "' - touch pickup will keep retrying. " +
                 "If you are in VR: make sure the XR Origin (with its controller interactors) is active, " +
                 "or assign the Left/Right Hand Override fields. " +
-                "If you are testing desktop mode (no XR rig): ignore this message - the E-key pickup still works.", this);
+                "If you are testing desktop mode (no XR rig): this is expected - the E-key pickup still works.", this);
         }
+    }
+
+    /// <summary>Depth-first name search through the hierarchy, inactive children included. Only used on the XR rig (small), so a simple walk is fine.</summary>
+    private static Transform FindDescendant(Transform root, string objectName)
+    {
+        if (root.name == objectName)
+            return root;
+
+        for (int i = 0; i < root.childCount; i++)
+        {
+            Transform result = FindDescendant(root.GetChild(i), objectName);
+            if (result != null)
+                return result;
+        }
+        return null;
     }
 
     private bool HandsValid()
